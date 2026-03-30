@@ -28,6 +28,7 @@ class StreamPipeline:
         self.error: Optional[str] = None
 
         self._tracker = TrackRegistry()
+        self._detection_was_enabled = detection_enabled
 
     # ------------------------------------------------------------------ public
 
@@ -132,9 +133,12 @@ class StreamPipeline:
 
                     self._tracker.mark_inactive(active_ids)
                     stats = self._tracker.get_stats()
+                    self._detection_was_enabled = True
                 else:
-                    # Detection off — clear tracker state, send empty stats
-                    self._tracker = TrackRegistry()
+                    # Detection just turned off — reset tracker once
+                    if self._detection_was_enabled:
+                        self._tracker = TrackRegistry()
+                        self._detection_was_enabled = False
                     stats = {"active_count": 0, "total_count": 0, "persons": []}
 
                 _, buf = cv2.imencode(
