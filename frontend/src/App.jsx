@@ -44,6 +44,17 @@ export default function App() {
     fetchStreams()
   }
 
+  async function handleToggleDetection(id, enabled) {
+    setStreams(prev =>
+      prev.map(s => (s.id === id ? { ...s, detection: enabled } : s))
+    )
+    await fetch(`/api/streams/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ detection: enabled }),
+    })
+  }
+
   return (
     <div className="flex h-screen bg-gray-950 text-white overflow-hidden flex-col">
       {/* Header */}
@@ -68,6 +79,7 @@ export default function App() {
           selectedId={selectedId}
           onSelect={setSelectedId}
           onDelete={handleDelete}
+          onToggleDetection={handleToggleDetection}
         />
         <CommandCenter streamId={selectedId} />
       </div>

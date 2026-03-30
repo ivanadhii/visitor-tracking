@@ -15,10 +15,11 @@ class StreamPipeline:
     Stores the latest annotated frame + stats for WebSocket consumers to poll.
     """
 
-    def __init__(self, stream_id: str, url: str):
+    def __init__(self, stream_id: str, url: str, detection_enabled: bool = True):
         self.stream_id = stream_id
         self.url = url
         self.running = False
+        self.detection_enabled = detection_enabled
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
@@ -74,7 +75,7 @@ class StreamPipeline:
                 continue
 
             try:
-                # Limit resolution sent to YOLO for speed
+                # Limit resolution for display
                 h, w = frame.shape[:2]
                 if w > 1280:
                     scale = 1280 / w
@@ -82,54 +83,59 @@ class StreamPipeline:
                 else:
                     display_frame = frame.copy()
 
-                results = model.track(
-                    display_frame,
-                    persist=True,
-                    classes=[0],   # person only
-                    verbose=False,
-                    device='cpu',
-                    tracker='/app/bytetrack.yaml',
-                )
+                if self.detection_enabled:
+                    results = model.track(
+                        display_frame,
+                        persist=True,
+                        classes=[0],   # person only
+                        verbose=False,
+                        device='cpu',
+                        tracker='/app/bytetrack.yaml',
+                    )
 
-                active_ids: set = set()
+                    active_ids: set = set()
 
-                if results[0].boxes.id is not None:
-                    boxes = results[0].boxes.xyxy.cpu().numpy()
-                    track_ids = results[0].boxes.id.cpu().numpy().astype(int)
-                    confs = results[0].boxes.conf.cpu().numpy()
+                    if results[0].boxes.id is not None:
+                        boxes = results[0].boxes.xyxy.cpu().numpy()
+                        track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+                        confs = results[0].boxes.conf.cpu().numpy()
 
-                    for box, raw_tid, conf in zip(boxes, track_ids, confs):
-                        tid = int(raw_tid)
-                        info = self._tracker.update(tid, float(conf))
-                        active_ids.add(tid)
+                        for box, raw_tid, conf in zip(boxes, track_ids, confs):
+                            tid = int(raw_tid)
+                            info = self._tracker.update(tid, float(conf))
+                            active_ids.add(tid)
 
-                        x1, y1, x2, y2 = map(int, box)
-                        color = (0, 255, 100)
-                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
+                            x1, y1, x2, y2 = map(int, box)
+                            color = (0, 255, 100)
+                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
 
-                        label = info.tag
-                        (tw, th), _ = cv2.getTextSize(
-                            label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2
-                        )
-                        cv2.rectangle(
-                            display_frame,
-                            (x1, y1 - th - 10),
-                            (x1 + tw + 6, y1),
-                            color,
-                            -1,
-                        )
-                        cv2.putText(
-                            display_frame,
-                            label,
-                            (x1 + 3, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.55,
-                            (0, 0, 0),
-                            2,
-                        )
+                            label = info.tag
+                            (tw, th), _ = cv2.getTextSize(
+                                label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2
+                            )
+                            cv2.rectangle(
+                                display_frame,
+                                (x1, y1 - th - 10),
+                                (x1 + tw + 6, y1),
+                                color,
+                                -1,
+                            )
+                            cv2.putText(
+                                display_frame,
+                                label,
+                                (x1 + 3, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.55,
+                                (0, 0, 0),
+                                2,
+                            )
 
-                self._tracker.mark_inactive(active_ids)
-                stats = self._tracker.get_stats()
+                    self._tracker.mark_inactive(active_ids)
+                    stats = self._tracker.get_stats()
+                else:
+                    # Detection off — clear tracker state, send empty stats
+                    self._tracker = TrackRegistry()
+                    stats = {"active_count": 0, "total_count": 0, "persons": []}
 
                 _, buf = cv2.imencode(
                     ".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75]

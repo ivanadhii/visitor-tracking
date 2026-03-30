@@ -1,6 +1,6 @@
-import { Trash2, Video } from 'lucide-react'
+import { Trash2, Video, Eye, EyeOff } from 'lucide-react'
 
-export default function StreamSidebar({ streams, selectedId, onSelect, onDelete }) {
+export default function StreamSidebar({ streams, selectedId, onSelect, onDelete, onToggleDetection }) {
   return (
     <aside className="w-52 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0">
       <div className="px-4 py-3 border-b border-gray-800">
@@ -20,6 +20,7 @@ export default function StreamSidebar({ streams, selectedId, onSelect, onDelete 
         {streams.map(stream => {
           const active = stream.stats?.active_count ?? 0
           const isSelected = stream.id === selectedId
+          const detectionOn = stream.detection !== false
 
           return (
             <button
@@ -41,7 +42,9 @@ export default function StreamSidebar({ streams, selectedId, onSelect, onDelete 
                   <span className="font-medium truncate">{stream.name}</span>
                 </div>
                 <div className="pl-3 text-xs text-gray-500">
-                  {stream.connected ? (
+                  {!detectionOn ? (
+                    <span className="text-gray-600">detection off</span>
+                  ) : stream.connected ? (
                     <span>
                       <span className="text-green-500">{active}</span> active
                     </span>
@@ -53,16 +56,32 @@ export default function StreamSidebar({ streams, selectedId, onSelect, onDelete 
                 </div>
               </div>
 
-              <button
-                onClick={e => {
-                  e.stopPropagation()
-                  onDelete(stream.id)
-                }}
-                className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 p-0.5 ml-1 shrink-0 transition"
-                title="Remove stream"
-              >
-                <Trash2 size={13} />
-              </button>
+              <div className="flex items-center gap-0.5 ml-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
+                <button
+                  onClick={e => {
+                    e.stopPropagation()
+                    onToggleDetection(stream.id, !detectionOn)
+                  }}
+                  className={`p-0.5 transition ${
+                    detectionOn
+                      ? 'text-green-500 hover:text-yellow-400'
+                      : 'text-gray-600 hover:text-green-400'
+                  }`}
+                  title={detectionOn ? 'Turn off detection' : 'Turn on detection'}
+                >
+                  {detectionOn ? <Eye size={13} /> : <EyeOff size={13} />}
+                </button>
+                <button
+                  onClick={e => {
+                    e.stopPropagation()
+                    onDelete(stream.id)
+                  }}
+                  className="text-gray-600 hover:text-red-400 p-0.5 transition"
+                  title="Remove stream"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             </button>
           )
         })}

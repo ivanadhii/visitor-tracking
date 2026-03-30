@@ -36,7 +36,7 @@ class StreamManager:
     def _write_yaml(self):
         os.makedirs(os.path.dirname(STREAMS_FILE), exist_ok=True)
         streams_list = [
-            {"id": s["id"], "name": s["name"], "url": s["url"]}
+            {"id": s["id"], "name": s["name"], "url": s["url"], "detection": s.get("detection", True)}
             for s in self._streams.values()
         ]
         try:
@@ -58,15 +58,17 @@ class StreamManager:
             sid = entry.get("id") or str(uuid.uuid4())[:8]
             url = entry.get("url", "").strip()
             name = entry.get("name", f"Camera {sid}")
+            detection = entry.get("detection", True)
             if not url:
                 continue
             self._streams[sid] = {
                 "id": sid,
                 "url": url,
                 "name": name,
+                "detection": detection,
                 "created_at": entry.get("created_at", time.time()),
             }
-            pipeline = StreamPipeline(sid, url)
+            pipeline = StreamPipeline(sid, url, detection_enabled=detection)
             self._pipelines[sid] = pipeline
             pipeline.start()
         if os.path.exists(STREAMS_FILE):
@@ -101,11 +103,13 @@ class StreamManager:
             sid = entry.get("id") or str(uuid.uuid4())[:8]
             url = entry.get("url", "").strip()
             name = entry.get("name", f"Camera {sid}")
+            detection = entry.get("detection", True)
             if url:
                 file_streams[sid] = {
                     "id": sid,
                     "url": url,
                     "name": name,
+                    "detection": detection,
                     "created_at": entry.get("created_at", time.time()),
                 }
 
@@ -117,7 +121,7 @@ class StreamManager:
             for sid in file_ids - current_ids:
                 s = file_streams[sid]
                 self._streams[sid] = s
-                pipeline = StreamPipeline(sid, s["url"])
+                pipeline = StreamPipeline(sid, s["url"], detection_enabled=s.get("detection", True))
                 self._pipelines[sid] = pipeline
                 pipeline.start()
                 print(f"[StreamManager] Auto-added '{s['name']}' from file")
@@ -131,7 +135,7 @@ class StreamManager:
                 del self._streams[sid]
                 print(f"[StreamManager] Auto-removed '{name}' (deleted from file)")
 
-            # URL or name changed
+            # URL, name, or detection changed
             for sid in current_ids & file_ids:
                 current = self._streams[sid]
                 updated = file_streams[sid]
@@ -139,13 +143,19 @@ class StreamManager:
                     if sid in self._pipelines:
                         self._pipelines[sid].stop()
                     self._streams[sid] = updated
-                    pipeline = StreamPipeline(sid, updated["url"])
+                    pipeline = StreamPipeline(sid, updated["url"], detection_enabled=updated.get("detection", True))
                     self._pipelines[sid] = pipeline
                     pipeline.start()
                     print(f"[StreamManager] Updated URL for '{updated['name']}'")
-                elif current["name"] != updated["name"]:
-                    self._streams[sid]["name"] = updated["name"]
-                    print(f"[StreamManager] Renamed stream to '{updated['name']}'")
+                else:
+                    if current["name"] != updated["name"]:
+                        self._streams[sid]["name"] = updated["name"]
+                        print(f"[StreamManager] Renamed stream to '{updated['name']}'")
+                    if current.get("detection", True) != updated.get("detection", True):
+                        self._streams[sid]["detection"] = updated["detection"]
+                        if sid in self._pipelines:
+                            self._pipelines[sid].detection_enabled = updated["detection"]
+                        print(f"[StreamManager] Detection {'ON' if updated['detection'] else 'OFF'} for '{updated['name']}'")
 
     # ─── public ───────────────────────────────────────────────────────────────
 
@@ -156,13 +166,24 @@ class StreamManager:
                 "id": sid,
                 "url": url,
                 "name": name,
+                "detection": True,
                 "created_at": time.time(),
             }
-            pipeline = StreamPipeline(sid, url)
+            pipeline = StreamPipeline(sid, url, detection_enabled=True)
             self._pipelines[sid] = pipeline
             pipeline.start()
             self._write_yaml()
         return sid
+
+    def set_detection(self, sid: str, enabled: bool) -> bool:
+        with self._lock:
+            if sid not in self._streams:
+                return False
+            self._streams[sid]["detection"] = enabled
+            if sid in self._pipelines:
+                self._pipelines[sid].detection_enabled = enabled
+            self._write_yaml()
+        return True
 
     def remove(self, sid: str) -> bool:
         with self._lock:
@@ -184,6 +205,7 @@ class StreamManager:
                 data["connected"] = p.is_connected if p else False
                 data["error"] = p.error if p else None
                 data["stats"] = (p.latest or {}).get("stats", {}) if p else {}
+                data["detection"] = stream.get("detection", True)
                 result.append(data)
         return result
 
