@@ -1,0 +1,17 @@
+tracker_type: bytetrack
+
+# Minimum confidence to start a new track (lebih rendah = lebih mudah detect)
+track_high_thresh: 0.30
+
+# Confidence untuk "low score" detections (membantu recovery track yang hampir hilang)
+track_low_thresh: 0.05
+
+# Minimum confidence untuk inisialisasi track baru
+new_track_thresh: 0.35
+
+# Berapa frame track dipertahankan meski orang tidak terdeteksi
+# 90 frame = ~3 detik di 30fps — cukup untuk orang yang sebentar tertutup/keluar frame
+track_buffer: 150
+
+# Threshold IoU matching — lebih tinggi = lebih toleran saat posisi bergeser
+match_thresh: 0.85
