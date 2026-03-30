@@ -9,6 +9,9 @@ from ultralytics import YOLO
 
 from .tracker import TrackRegistry
 
+_FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
+_FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
+
 
 class StreamPipeline:
     """
@@ -54,22 +57,18 @@ class StreamPipeline:
     def _run(self):
         model: Optional[YOLO] = None
         cap: Optional[cv2.VideoCapture] = None
-        _frame_interval = 1 / 10  # 10 fps cap when detection is off
-        _last_frame_time: float = 0
 
         while self.running:
             # ── Model lifecycle ──────────────────────────────────────────────
             if self.detection_enabled and model is None:
-                # Lazy-load YOLO only when detection turns on
                 model = YOLO("yolov8n.pt")
                 self._detection_was_enabled = True
             elif not self.detection_enabled and self._detection_was_enabled:
-                # Detection just turned off — free model from memory
                 model = None
                 gc.collect()
                 self._tracker = TrackRegistry()
                 self._detection_was_enabled = False
-                print(f"[Pipeline {self.stream_id}] YOLO unloaded, memory freed")
+                print(f"[Pipeline {self.stream_id}] YOLO unloaded")
 
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
@@ -83,22 +82,19 @@ class StreamPipeline:
                 self.is_connected = True
                 self.error = None
 
-            # ── Detection off: grab (no decode) to drain buffer, throttle ───
-            if not self.detection_enabled:
-                now = time.monotonic()
-                if now - _last_frame_time < _frame_interval:
-                    # Drain RTSP buffer without full decode
-                    cap.grab()
-                    continue
-                _last_frame_time = now
+            # ── Throttle: sleep first, then read ONE frame ───────────────────
+            # This is the key: sleep lets the OS scheduler rest this thread
+            # instead of burning CPU in a tight loop.
+            if self.detection_enabled:
+                time.sleep(_FRAME_INTERVAL_ON)
+            else:
+                time.sleep(_FRAME_INTERVAL_OFF)
 
-            # ── Full frame decode ────────────────────────────────────────────
             ret, frame = cap.read()
             if not ret:
                 cap.release()
                 cap = None
                 self.is_connected = False
-                time.sleep(1)
                 continue
 
             try:
@@ -113,7 +109,7 @@ class StreamPipeline:
                     results = model.track(
                         display_frame,
                         persist=True,
-                        classes=[0],   # person only
+                        classes=[0],
                         verbose=False,
                         device='cpu',
                         tracker='/app/bytetrack.yaml',
