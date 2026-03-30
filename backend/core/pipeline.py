@@ -51,10 +51,16 @@ class StreamPipeline:
     # ----------------------------------------------------------------- private
 
     def _run(self):
-        model = YOLO("yolov8n.pt")
+        model: Optional[YOLO] = None
         cap: Optional[cv2.VideoCapture] = None
+        _frame_interval = 1 / 10  # 10 fps cap when detection is off
+        _last_frame_time: float = 0
 
         while self.running:
+            # ── Lazy-load YOLO only when detection is needed ─────────────────
+            if self.detection_enabled and model is None:
+                model = YOLO("yolov8n.pt")
+
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
                 cap = cv2.VideoCapture(self.url)
@@ -76,15 +82,15 @@ class StreamPipeline:
                 continue
 
             try:
-                # Limit resolution for display
-                h, w = frame.shape[:2]
-                if w > 1280:
-                    scale = 1280 / w
-                    display_frame = cv2.resize(frame, (1280, int(h * scale)))
-                else:
-                    display_frame = frame.copy()
-
                 if self.detection_enabled:
+                    # Limit resolution for YOLO
+                    h, w = frame.shape[:2]
+                    if w > 1280:
+                        scale = 1280 / w
+                        display_frame = cv2.resize(frame, (1280, int(h * scale)))
+                    else:
+                        display_frame = frame.copy()
+
                     results = model.track(
                         display_frame,
                         persist=True,
@@ -135,10 +141,24 @@ class StreamPipeline:
                     stats = self._tracker.get_stats()
                     self._detection_was_enabled = True
                 else:
-                    # Detection just turned off — reset tracker once
+                    # Throttle to 10 fps when detection is off
+                    now = time.monotonic()
+                    if now - _last_frame_time < _frame_interval:
+                        continue
+                    _last_frame_time = now
+
+                    # Reset tracker once on transition
                     if self._detection_was_enabled:
                         self._tracker = TrackRegistry()
                         self._detection_was_enabled = False
+
+                    h, w = frame.shape[:2]
+                    if w > 1280:
+                        scale = 1280 / w
+                        display_frame = cv2.resize(frame, (1280, int(h * scale)))
+                    else:
+                        display_frame = frame.copy()
+
                     stats = {"active_count": 0, "total_count": 0, "persons": []}
 
                 _, buf = cv2.imencode(
