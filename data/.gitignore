@@ -1,0 +1,2 @@
+# Ignore stream config (contains RTSP URLs with credentials)
+streams.yaml

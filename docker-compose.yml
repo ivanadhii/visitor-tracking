@@ -8,7 +8,7 @@ services:
     volumes:
       - yolo_cache:/root/.config/Ultralytics
       - ./backend/bytetrack.yaml:/app/bytetrack.yaml
-      - streams_data:/app/data
+      - ./data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/streams"]
       interval: 10s
@@ -38,4 +38,3 @@ networks:
 
 volumes:
   yolo_cache:
-  streams_data:
