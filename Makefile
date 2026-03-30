@@ -1,4 +1,7 @@
-.PHONY: up down build rebuild restart logs logs-backend logs-frontend logs-nginx ps clean
+PLAIN := -f docker-compose.plain.yml
+
+.PHONY: up down build rebuild restart logs logs-backend logs-frontend logs-nginx ps clean \
+        plain plain-down plain-build plain-rebuild-backend plain-restart plain-logs plain-logs-backend plain-ps plain-clean
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 up:
@@ -55,4 +58,33 @@ tune:
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 clean:
 	docker compose down --volumes --remove-orphans
+	docker image prune -f
+
+# ── Plain mode (tanpa AI / PyTorch) ───────────────────────────────────────────
+plain:
+	docker compose $(PLAIN) up -d
+
+plain-build:
+	docker compose $(PLAIN) up -d --build
+
+plain-down:
+	docker compose $(PLAIN) down
+
+plain-rebuild-backend:
+	docker compose $(PLAIN) up -d --build backend
+
+plain-restart:
+	docker compose $(PLAIN) restart
+
+plain-logs:
+	docker compose $(PLAIN) logs -f --tail 100
+
+plain-logs-backend:
+	docker compose $(PLAIN) logs -f --tail 100 backend
+
+plain-ps:
+	docker compose $(PLAIN) ps
+
+plain-clean:
+	docker compose $(PLAIN) down --volumes --remove-orphans
 	docker image prune -f
