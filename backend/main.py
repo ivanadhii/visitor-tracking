@@ -26,6 +26,9 @@ class StreamCreate(BaseModel):
 class StreamUpdate(BaseModel):
     detection: bool
 
+class DetectionAll(BaseModel):
+    detection: bool
+
 
 # ──────────────────────────────────────────────────────────────────── REST API
 
@@ -38,6 +41,12 @@ def list_streams():
 def create_stream(body: StreamCreate):
     sid = manager.add(body.url, body.name)
     return {"id": sid}
+
+
+@app.patch("/api/streams")
+def update_all_streams(body: DetectionAll):
+    manager.set_detection_all(body.detection)
+    return {"ok": True}
 
 
 @app.patch("/api/streams/{stream_id}")

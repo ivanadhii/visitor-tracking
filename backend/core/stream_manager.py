@@ -175,6 +175,14 @@ class StreamManager:
             self._write_yaml()
         return sid
 
+    def set_detection_all(self, enabled: bool):
+        with self._lock:
+            for sid in self._streams:
+                self._streams[sid]["detection"] = enabled
+                if sid in self._pipelines:
+                    self._pipelines[sid].detection_enabled = enabled
+            self._write_yaml()
+
     def set_detection(self, sid: str, enabled: bool) -> bool:
         with self._lock:
             if sid not in self._streams:

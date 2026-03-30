@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Brain } from 'lucide-react'
 import StreamSidebar from './components/StreamSidebar'
 import CommandCenter from './components/CommandCenter'
 import AddStreamModal from './components/AddStreamModal'
@@ -44,6 +45,21 @@ export default function App() {
     fetchStreams()
   }
 
+  const allDetectionOn = useMemo(
+    () => streams.length > 0 && streams.every(s => s.detection !== false),
+    [streams]
+  )
+
+  async function handleToggleAllDetection() {
+    const next = !allDetectionOn
+    setStreams(prev => prev.map(s => ({ ...s, detection: next })))
+    await fetch('/api/streams', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ detection: next }),
+    })
+  }
+
   async function handleToggleDetection(id, enabled) {
     setStreams(prev =>
       prev.map(s => (s.id === id ? { ...s, detection: enabled } : s))
@@ -64,12 +80,27 @@ export default function App() {
           <span className="font-bold text-base tracking-tight">VisionTrack</span>
           <span className="text-gray-600 text-xs ml-1">RTSP · Person Tracking</span>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="ml-auto text-sm bg-green-500 hover:bg-green-400 active:bg-green-600 text-black font-semibold px-3 py-1.5 rounded-md transition-colors"
-        >
-          + Add Stream
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleToggleAllDetection}
+            disabled={streams.length === 0}
+            className={`flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+              allDetectionOn
+                ? 'bg-green-500/20 hover:bg-red-500/20 text-green-400 hover:text-red-400 border border-green-500/30 hover:border-red-500/30'
+                : 'bg-gray-700 hover:bg-green-500/20 text-gray-400 hover:text-green-400 border border-gray-600 hover:border-green-500/30'
+            }`}
+            title={allDetectionOn ? 'Turn off AI detection for all streams' : 'Turn on AI detection for all streams'}
+          >
+            <Brain size={14} />
+            {allDetectionOn ? 'AI On' : 'AI Off'}
+          </button>
+          <button
+            onClick={() => setShowModal(true)}
+            className="text-sm bg-green-500 hover:bg-green-400 active:bg-green-600 text-black font-semibold px-3 py-1.5 rounded-md transition-colors"
+          >
+            + Add Stream
+          </button>
+        </div>
       </header>
 
       {/* Body */}
