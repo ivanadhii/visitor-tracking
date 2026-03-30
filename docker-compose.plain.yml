@@ -1,0 +1,38 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.plain
+    networks: [internal]
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NO_AI=1
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/streams"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    networks: [internal]
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "80:80"
+    networks: [internal]
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+
+networks:
+  internal:
+    driver: bridge

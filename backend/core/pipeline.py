@@ -1,13 +1,17 @@
 import cv2
 import gc
+import os
 import base64
 import threading
 import time
 from typing import Optional, Dict, Any
 
-from ultralytics import YOLO
-
 from .tracker import TrackRegistry
+
+_NO_AI = os.environ.get("NO_AI", "0") == "1"
+
+if not _NO_AI:
+    from ultralytics import YOLO
 
 _FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
 _FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
@@ -60,7 +64,7 @@ class StreamPipeline:
 
         while self.running:
             # ── Model lifecycle ──────────────────────────────────────────────
-            if self.detection_enabled and model is None:
+            if not _NO_AI and self.detection_enabled and model is None:
                 model = YOLO("yolov8n.pt")
                 self._detection_was_enabled = True
             elif not self.detection_enabled and self._detection_was_enabled:
@@ -105,7 +109,7 @@ class StreamPipeline:
                 else:
                     display_frame = frame.copy()
 
-                if self.detection_enabled:
+                if not _NO_AI and self.detection_enabled:
                     results = model.track(
                         display_frame,
                         persist=True,
