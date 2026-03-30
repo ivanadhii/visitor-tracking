@@ -1,4 +1,5 @@
 import cv2
+import gc
 import base64
 import threading
 import time
@@ -57,9 +58,18 @@ class StreamPipeline:
         _last_frame_time: float = 0
 
         while self.running:
-            # ── Lazy-load YOLO only when detection is needed ─────────────────
+            # ── Model lifecycle ──────────────────────────────────────────────
             if self.detection_enabled and model is None:
+                # Lazy-load YOLO only when detection turns on
                 model = YOLO("yolov8n.pt")
+                self._detection_was_enabled = True
+            elif not self.detection_enabled and self._detection_was_enabled:
+                # Detection just turned off — free model from memory
+                model = None
+                gc.collect()
+                self._tracker = TrackRegistry()
+                self._detection_was_enabled = False
+                print(f"[Pipeline {self.stream_id}] YOLO unloaded, memory freed")
 
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
@@ -73,6 +83,16 @@ class StreamPipeline:
                 self.is_connected = True
                 self.error = None
 
+            # ── Detection off: grab (no decode) to drain buffer, throttle ───
+            if not self.detection_enabled:
+                now = time.monotonic()
+                if now - _last_frame_time < _frame_interval:
+                    # Drain RTSP buffer without full decode
+                    cap.grab()
+                    continue
+                _last_frame_time = now
+
+            # ── Full frame decode ────────────────────────────────────────────
             ret, frame = cap.read()
             if not ret:
                 cap.release()
@@ -82,15 +102,14 @@ class StreamPipeline:
                 continue
 
             try:
-                if self.detection_enabled:
-                    # Limit resolution for YOLO
-                    h, w = frame.shape[:2]
-                    if w > 1280:
-                        scale = 1280 / w
-                        display_frame = cv2.resize(frame, (1280, int(h * scale)))
-                    else:
-                        display_frame = frame.copy()
+                h, w = frame.shape[:2]
+                if w > 1280:
+                    scale = 1280 / w
+                    display_frame = cv2.resize(frame, (1280, int(h * scale)))
+                else:
+                    display_frame = frame.copy()
 
+                if self.detection_enabled:
                     results = model.track(
                         display_frame,
                         persist=True,
@@ -139,26 +158,7 @@ class StreamPipeline:
 
                     self._tracker.mark_inactive(active_ids)
                     stats = self._tracker.get_stats()
-                    self._detection_was_enabled = True
                 else:
-                    # Throttle to 10 fps when detection is off
-                    now = time.monotonic()
-                    if now - _last_frame_time < _frame_interval:
-                        continue
-                    _last_frame_time = now
-
-                    # Reset tracker once on transition
-                    if self._detection_was_enabled:
-                        self._tracker = TrackRegistry()
-                        self._detection_was_enabled = False
-
-                    h, w = frame.shape[:2]
-                    if w > 1280:
-                        scale = 1280 / w
-                        display_frame = cv2.resize(frame, (1280, int(h * scale)))
-                    else:
-                        display_frame = frame.copy()
-
                     stats = {"active_count": 0, "total_count": 0, "persons": []}
 
                 _, buf = cv2.imencode(
