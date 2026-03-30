@@ -4,7 +4,7 @@ import PersonList from './PersonList'
 
 const EMPTY_STATS = { active_count: 0, total_seen: 0, tracks: [] }
 
-export default function CommandCenter({ streamId }) {
+export default function CommandCenter({ streamId, token }) {
   const imgRef = useRef(null)
   const wsRef = useRef(null)
   const [stats, setStats] = useState(EMPTY_STATS)
@@ -18,7 +18,8 @@ export default function CommandCenter({ streamId }) {
     }
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/ws/stream/${streamId}`)
+    const query = token ? `?token=${token}` : ''
+    const ws = new WebSocket(`${proto}://${location.host}/ws/stream/${streamId}${query}`)
 
     ws.onopen = () => setConnected(true)
     ws.onclose = () => setConnected(false)

@@ -1,2 +1,3 @@
-# Ignore stream config (contains RTSP URLs with credentials)
+# Ignore configs containing credentials
 streams.yaml
+userlist.yaml
