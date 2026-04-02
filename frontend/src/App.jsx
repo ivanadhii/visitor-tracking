@@ -149,44 +149,47 @@ export default function App() {
   return (
     <div className="flex h-screen bg-gray-950 text-white overflow-hidden flex-col">
       {/* Header */}
-      <header className="h-12 bg-gray-900 border-b border-gray-800 flex items-center px-5 shrink-0 z-10">
-        <div className="flex items-center gap-2.5">
+      <header className="h-13 bg-gray-900 border-b border-gray-800 flex items-center px-5 shrink-0 z-10 gap-4">
+        {/* Brand */}
+        <div className="flex items-center gap-2.5 shrink-0">
           <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          <span className="font-bold text-base tracking-tight">VisionTrack</span>
-          <span className="text-gray-600 text-xs ml-1">RTSP · Person Tracking</span>
+          <span className="font-bold text-sm tracking-tight">VisionTrack</span>
+          <span className="text-gray-700 text-xs hidden sm:block">RTSP · AI Tracking</span>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* AI toggle */}
           <button
             onClick={handleToggleAllDetection}
             disabled={streams.length === 0}
-            className={`flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
               allDetectionOn
-                ? 'bg-green-500/20 hover:bg-red-500/20 text-green-400 hover:text-red-400 border border-green-500/30 hover:border-red-500/30'
-                : 'bg-gray-700 hover:bg-green-500/20 text-gray-400 hover:text-green-400 border border-gray-600 hover:border-green-500/30'
+                ? 'bg-green-500/15 text-green-400 border border-green-500/25 hover:bg-red-500/15 hover:text-red-400 hover:border-red-500/25'
+                : 'bg-gray-800 text-gray-500 border border-gray-700 hover:bg-green-500/15 hover:text-green-400 hover:border-green-500/25'
             }`}
-            title={allDetectionOn ? 'Turn off AI detection for all streams' : 'Turn on AI detection for all streams'}
           >
-            <Brain size={14} />
+            <Brain size={13} />
             {allDetectionOn ? 'AI On' : 'AI Off'}
           </button>
 
+          {/* Add stream */}
           <button
             onClick={() => setShowModal(true)}
-            className="text-sm bg-green-500 hover:bg-green-400 active:bg-green-600 text-black font-semibold px-3 py-1.5 rounded-md transition-colors"
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-400 active:bg-green-600 text-black transition-colors"
           >
-            + Add Stream
+            + Tambah Stream
           </button>
 
+          {/* User */}
           {token && (
-            <div className="flex items-center gap-2 pl-2 border-l border-gray-700">
-              <span className="text-xs text-gray-500">{username}</span>
+            <div className="flex items-center gap-2 pl-3 border-l border-gray-800">
+              <span className="text-xs text-gray-500 font-medium">{username}</span>
               <button
                 onClick={handleLogout}
-                className="text-gray-500 hover:text-red-400 transition-colors p-1"
+                className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded"
                 title="Logout"
               >
-                <LogOut size={14} />
+                <LogOut size={13} />
               </button>
             </div>
           )}

@@ -1,8 +1,11 @@
 import asyncio
+import threading
+import time
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import psutil
 
 from core.stream_manager import StreamManager
 from core.auth import AuthManager
@@ -18,6 +21,35 @@ app.add_middleware(
 
 manager = StreamManager()
 auth = AuthManager()
+
+# ──────────────────────────────────────────────────────────────────── sys stats
+
+_sys_cache: dict = {"cpu": 0.0}
+
+def _cpu_poller():
+    while True:
+        _sys_cache["cpu"] = psutil.cpu_percent(interval=2)
+
+threading.Thread(target=_cpu_poller, daemon=True, name="cpu-poller").start()
+
+def _gpu_stats() -> Optional[dict]:
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        mem   = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        util  = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        temp  = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+        name  = pynvml.nvmlDeviceGetName(handle)
+        return {
+            "name": name if isinstance(name, str) else name.decode(),
+            "util": util.gpu,
+            "mem_used_mb": mem.used  // 1024 ** 2,
+            "mem_total_mb": mem.total // 1024 ** 2,
+            "temp_c": temp,
+        }
+    except Exception:
+        return None
 
 
 # ──────────────────────────────────────────────────────────────────── schemas
@@ -70,6 +102,24 @@ def logout():
 @app.get("/api/auth/me")
 def me(username: str = require_auth):  # type: ignore[assignment]
     return {"username": username, "auth_required": auth.auth_required}
+
+
+# ──────────────────────────────────────────────────────────────── system stats
+
+@app.get("/api/system")
+def system_stats(username: str = require_auth):  # type: ignore[assignment]
+    ram  = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    return {
+        "cpu":  round(_sys_cache["cpu"], 1),
+        "ram":  {"used_gb": round(ram.used  / 1024**3, 2),
+                 "total_gb": round(ram.total / 1024**3, 2),
+                 "percent":  round(ram.percent, 1)},
+        "disk": {"used_gb": round(disk.used  / 1024**3, 1),
+                 "total_gb": round(disk.total / 1024**3, 1),
+                 "percent":  round(disk.percent, 1)},
+        "gpu":  _gpu_stats(),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────── REST API
