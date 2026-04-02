@@ -21,12 +21,23 @@ else:
 _FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
 _FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
 
-# Force TCP transport for RTSP — avoids UDP packet loss that causes
-# H.265 "Could not find ref with POC" / missing reference frame errors.
-# Also discard corrupt packets instead of propagating decode errors.
+# Force TCP transport + lenient H.265 decode.
+# Hikvision H.265 has long GOP (50+ frames). On connect, FFmpeg receives
+# P-frames before the first IDR — causing "Could not find ref with POC"
+# warnings until the next keyframe arrives. These are non-fatal; stream
+# decodes correctly once it gets an IDR frame.
+# - rtsp_transport=tcp: reliable delivery, avoids packet loss
+# - stimeout=10s: enough time to receive first keyframe
+# - err_detect=ignore_err: keep decoding despite missing ref frames
+# - fflags=discardcorrupt: drop corrupt packets silently
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-    "rtsp_transport;tcp|stimeout;5000000|fflags;discardcorrupt"
+    "rtsp_transport;tcp"
+    "|stimeout;10000000"
+    "|err_detect;ignore_err"
+    "|fflags;discardcorrupt"
 )
+# Suppress FFmpeg warnings in log — H.265 GOP warnings are expected on connect
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 
 class StreamPipeline:
@@ -89,12 +100,16 @@ class StreamPipeline:
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
                 cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
                 if not cap.isOpened():
                     self.is_connected = False
                     self.error = "Cannot open stream"
-                    time.sleep(3)
+                    time.sleep(5)
                     continue
+                # Flush initial corrupted frames while H.265 decoder
+                # waits for the first IDR keyframe (up to ~2 seconds)
+                for _ in range(10):
+                    cap.read()
                 self.is_connected = True
                 self.error = None
 
