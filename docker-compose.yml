@@ -9,6 +9,13 @@ services:
       - yolo_cache:/root/.config/Ultralytics
       - ./backend/bytetrack.yaml:/app/bytetrack.yaml
       - ./data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/streams"]
       interval: 10s

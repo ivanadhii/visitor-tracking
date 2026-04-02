@@ -11,7 +11,12 @@ from .tracker import TrackRegistry
 _NO_AI = os.environ.get("NO_AI", "0") == "1"
 
 if not _NO_AI:
+    import torch
     from ultralytics import YOLO
+    _DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[Pipeline] Using device: {_DEVICE}")
+else:
+    _DEVICE = "cpu"
 
 _FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
 _FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
@@ -115,7 +120,7 @@ class StreamPipeline:
                         persist=True,
                         classes=[0],
                         verbose=False,
-                        device='cpu',
+                        device=_DEVICE,
                         tracker='/app/bytetrack.yaml',
                     )
 

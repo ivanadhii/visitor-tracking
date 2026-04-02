@@ -1,7 +1,8 @@
 PLAIN := -f docker-compose.plain.yml
 
 .PHONY: up down build rebuild restart logs logs-backend logs-frontend logs-nginx ps clean \
-        plain plain-down plain-build plain-rebuild-backend plain-restart plain-logs plain-logs-backend plain-ps plain-clean
+        plain plain-down plain-build plain-rebuild-backend plain-restart plain-logs plain-logs-backend plain-ps plain-clean \
+        gpu-check
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 up:
@@ -50,6 +51,10 @@ logs-nginx:
 # ── Status ─────────────────────────────────────────────────────────────────────
 ps:
 	docker compose ps
+
+# ── GPU check ─────────────────────────────────────────────────────────────────
+gpu-check:
+	docker compose exec backend python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')"
 
 # ── Tuning (ubah bytetrack.yaml lalu apply tanpa rebuild) ─────────────────────
 tune:
