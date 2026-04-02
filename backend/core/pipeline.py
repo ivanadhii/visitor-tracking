@@ -35,8 +35,8 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
     "|stimeout;10000000"
     "|err_detect;ignore_err"
     "|fflags;discardcorrupt"
+    "|loglevel;error"
 )
-# Suppress FFmpeg warnings in log — H.265 GOP warnings are expected on connect
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 

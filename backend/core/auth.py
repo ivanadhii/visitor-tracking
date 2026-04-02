@@ -1,21 +1,38 @@
 import os
-import uuid
+import secrets
 import time
 import yaml
 import threading
+import jwt
 from typing import Dict, Optional
 
 USERS_FILE = os.environ.get("USERS_FILE", "/app/data/userlist.yaml")
-SESSION_TTL = 8 * 3600  # 8 hours
+SECRET_FILE = os.environ.get("JWT_SECRET_FILE", "/app/data/.jwt_secret")
+TOKEN_TTL = 8 * 3600  # 8 hours
+
+
+def _load_or_create_secret() -> str:
+    """Load JWT secret from file, or generate and persist a new one."""
+    if os.path.exists(SECRET_FILE):
+        with open(SECRET_FILE) as f:
+            secret = f.read().strip()
+            if secret:
+                return secret
+    os.makedirs(os.path.dirname(SECRET_FILE), exist_ok=True)
+    secret = secrets.token_hex(32)
+    with open(SECRET_FILE, "w") as f:
+        f.write(secret)
+    return secret
+
+
+_JWT_SECRET = _load_or_create_secret()
 
 
 class AuthManager:
     def __init__(self):
-        self._users: Dict[str, str] = {}       # username -> password
-        self._sessions: Dict[str, dict] = {}   # token -> {username, expires_at}
+        self._users: Dict[str, str] = {}
         self._file_mtime: float = 0
         self._lock = threading.Lock()
-
         self._load()
         self._start_watcher()
 
@@ -42,11 +59,6 @@ class AuthManager:
                 users[username] = password
         with self._lock:
             self._users = users
-            # Invalidate sessions for removed users
-            self._sessions = {
-                t: s for t, s in self._sessions.items()
-                if s["username"] in users
-            }
         if os.path.exists(USERS_FILE):
             self._file_mtime = os.path.getmtime(USERS_FILE)
         print(f"[AuthManager] Loaded {len(users)} user(s)")
@@ -75,7 +87,6 @@ class AuthManager:
 
     @property
     def auth_required(self) -> bool:
-        """Auth is only required if userlist.yaml exists and has users."""
         with self._lock:
             return len(self._users) > 0
 
@@ -83,24 +94,23 @@ class AuthManager:
         with self._lock:
             if self._users.get(username) != password:
                 return None
-            token = str(uuid.uuid4())
-            self._sessions[token] = {
-                "username": username,
-                "expires_at": time.time() + SESSION_TTL,
-            }
-        return token
-
-    def logout(self, token: str):
-        with self._lock:
-            self._sessions.pop(token, None)
+        payload = {
+            "sub": username,
+            "exp": int(time.time()) + TOKEN_TTL,
+        }
+        return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
 
     def verify(self, token: str) -> Optional[str]:
         """Returns username if token is valid, None otherwise."""
-        with self._lock:
-            session = self._sessions.get(token)
-            if not session:
-                return None
-            if time.time() > session["expires_at"]:
-                del self._sessions[token]
-                return None
-            return session["username"]
+        try:
+            payload = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
+            username = payload.get("sub")
+            # Reject if user was removed from userlist
+            with self._lock:
+                if self._users and username not in self._users:
+                    return None
+            return username
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            return None

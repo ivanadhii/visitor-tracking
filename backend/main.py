@@ -62,9 +62,8 @@ def login(body: LoginBody):
 
 
 @app.post("/api/auth/logout")
-def logout(authorization: Optional[str] = Header(default=None)):
-    if authorization and authorization.startswith("Bearer "):
-        auth.logout(authorization.removeprefix("Bearer "))
+def logout():
+    # JWT is stateless — actual logout is handled client-side by clearing the token
     return {"ok": True}
 
 
