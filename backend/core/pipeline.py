@@ -21,6 +21,13 @@ else:
 _FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
 _FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
 
+# Force TCP transport for RTSP — avoids UDP packet loss that causes
+# H.265 "Could not find ref with POC" / missing reference frame errors.
+# Also discard corrupt packets instead of propagating decode errors.
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+    "rtsp_transport;tcp|stimeout;5000000|fflags;discardcorrupt"
+)
+
 
 class StreamPipeline:
     """
@@ -81,7 +88,7 @@ class StreamPipeline:
 
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
-                cap = cv2.VideoCapture(self.url)
+                cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 if not cap.isOpened():
                     self.is_connected = False
