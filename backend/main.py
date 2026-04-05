@@ -10,7 +10,7 @@ import psutil
 from core.stream_manager import StreamManager
 from core.auth import AuthManager
 
-app = FastAPI(title="VisionTrack API")
+app = FastAPI(title="Person Tracking API")
 
 app.add_middleware(
     CORSMiddleware,

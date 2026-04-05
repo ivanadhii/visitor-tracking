@@ -35,7 +35,7 @@ export default function LoginPage({ onLogin }) {
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-8">
           <div className="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse" />
-          <span className="font-bold text-xl tracking-tight text-white">VisionTrack</span>
+          <span className="font-bold text-xl tracking-tight text-white">Person Tracking</span>
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl">

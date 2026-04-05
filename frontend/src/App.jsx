@@ -153,7 +153,7 @@ export default function App() {
         {/* Brand */}
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          <span className="font-bold text-sm tracking-tight">VisionTrack</span>
+          <span className="font-bold text-sm tracking-tight">Person Tracking</span>
           <span className="text-gray-700 text-xs hidden sm:block">RTSP · AI Tracking</span>
         </div>
 
