@@ -10,8 +10,11 @@ track_low_thresh: 0.05
 new_track_thresh: 0.35
 
 # Berapa frame track dipertahankan meski orang tidak terdeteksi
-# 90 frame = ~3 detik di 30fps — cukup untuk orang yang sebentar tertutup/keluar frame
+# 150 frame = ~5 detik di 30fps — cukup untuk orang yang sebentar tertutup/keluar frame
 track_buffer: 150
 
 # Threshold IoU matching — lebih tinggi = lebih toleran saat posisi bergeser
 match_thresh: 0.85
+
+# Gabungkan detection score + IoU saat matching (dibutuhkan ultralytics >= 8.3)
+fuse_score: True
