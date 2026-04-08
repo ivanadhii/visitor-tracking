@@ -26,8 +26,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download YOLOv8n weights so first-run isn't slow
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+# Pre-download YOLOv11n weights so first-run isn't slow
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 
 COPY . .
 
