@@ -78,12 +78,20 @@ export default function CommandCenter({ streamId, token }) {
     const query = token ? `?token=${token}` : ''
     let ws
     let retryTimer
+    // Buffer the latest stats; flush to React state at most 2/s to avoid flicker
+    let pendingStats = null
+    const flushInterval = setInterval(() => {
+      if (pendingStats !== null) {
+        setStats(pendingStats)
+        pendingStats = null
+      }
+    }, 500)
 
     const connect = () => {
       ws = new WebSocket(`${proto}://${location.host}/ws/stream/${streamId}${query}`)
       ws.onmessage = e => {
         const d = JSON.parse(e.data)
-        if (d.stats) setStats(d.stats)
+        if (d.stats) pendingStats = d.stats
       }
       ws.onclose = () => {
         retryTimer = setTimeout(connect, 3000)
@@ -94,6 +102,7 @@ export default function CommandCenter({ streamId, token }) {
     connect()
     return () => {
       clearTimeout(retryTimer)
+      clearInterval(flushInterval)
       ws?.close()
     }
   }, [streamId, token])

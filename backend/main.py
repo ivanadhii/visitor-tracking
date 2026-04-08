@@ -174,15 +174,16 @@ async def stream_ws(
         return
 
     await ws.accept()
-    last = None
+    last_sent = None
 
     try:
         while pipeline.running:
             data = pipeline.get_latest()
-            if data is not None and data is not last:
+            # Send at most 2/s, and only when stats actually changed
+            if data is not None and data is not last_sent:
                 await ws.send_json(data)
-                last = data
-            await asyncio.sleep(1 / 20)
+                last_sent = data
+            await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         pass
     except Exception:

@@ -39,6 +39,9 @@ _MAX_FAILURES = 25   # consecutive failed reads before reconnect
 _INFER_FPS    = 5    # YOLO inference rate
 _PIPE_FPS     = 10   # annotated frames sent to FFmpeg pipe
 
+# We keep the last annotated frame and re-send it to the pipe between
+# inference ticks so FFmpeg always gets a steady stream without blank boxes.
+
 # Bounding box / label style
 _BOX_COLOR    = (0, 255, 80)    # green
 _BOX_INACTIVE = (100, 100, 100) # grey for recently-inactive tracks
@@ -92,6 +95,7 @@ class StreamPipeline:
         self._detection_was_enabled = detection_enabled
         self._last_infer: float = 0.0
         self._last_pipe:  float = 0.0
+        self._annotated_frame: Optional[bytes] = None   # last annotated frame bytes
 
     # ------------------------------------------------------------------ public
 
@@ -200,20 +204,24 @@ class StreamPipeline:
                     _draw_boxes(frame, results, self._tracker)
                     self._tracker.mark_inactive(active_ids)
 
+                    # Cache the freshly annotated frame bytes
+                    self._annotated_frame = frame.tobytes()
+
                     with self._lock:
                         self.latest = {"stats": self._tracker.get_stats()}
 
                 except Exception as exc:
                     print(f"[Pipeline {self.stream_id}] Inference error: {exc}")
 
-            # ── Pipe annotated frame to HLS writer at _PIPE_FPS ──────────────
+            # ── Pipe to HLS writer at _PIPE_FPS ──────────────────────────────
+            # Always send the last annotated frame (not the raw frame) so boxes
+            # are stable between inference ticks — no flicker.
             if self._hls and (now - self._last_pipe) >= 1.0 / _PIPE_FPS:
                 self._last_pipe = now
-                self._hls.start_pipe(w, h)   # no-op if already started at same size
-                ok = self._hls.write_frame(frame.tobytes())
-                if not ok:
-                    # Pipe died — restart it next iteration
-                    pass
+                payload = self._annotated_frame
+                if payload is not None:
+                    self._hls.start_pipe(w, h)
+                    self._hls.write_frame(payload)
 
         if cap:
             cap.release()
