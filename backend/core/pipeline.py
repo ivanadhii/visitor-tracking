@@ -3,7 +3,6 @@ import gc
 import os
 import ctypes
 import ctypes.util
-import base64
 import threading
 import time
 from typing import Optional, Dict, Any
@@ -20,10 +19,7 @@ if not _NO_AI:
 else:
     _DEVICE = "cpu"
 
-# ── Suppress FFmpeg global log spam ─────────────────────────────────────────
-# OPENCV_FFMPEG_CAPTURE_OPTIONS "loglevel" only affects per-stream options,
-# not the global FFmpeg log level. Must call av_log_set_level() directly.
-# AV_LOG_ERROR = 16  (only show actual errors, not warnings)
+# Suppress FFmpeg global log spam via av_log_set_level(AV_LOG_ERROR=16)
 _avutil = ctypes.util.find_library("avutil")
 if _avutil:
     try:
@@ -31,28 +27,19 @@ if _avutil:
     except Exception:
         pass
 
-_FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
-_FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
-
-# H.265 Hikvision: TCP transport + lenient decode settings
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-    "rtsp_transport;tcp"
-    "|stimeout;10000000"
-    "|err_detect;ignore_err"
-    "|fflags;discardcorrupt"
+    "rtsp_transport;tcp|stimeout;10000000|err_detect;ignore_err|fflags;discardcorrupt"
 )
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
-# Max consecutive failed reads before treating as disconnected.
-# H.265 GOP can be 50+ frames — give the stream time to reach an IDR
-# instead of immediately reconnecting and looping forever.
-_MAX_FAILURES = 25
+_MAX_FAILURES = 25   # consecutive failed reads before reconnect
 
 
 class StreamPipeline:
     """
-    Runs RTSP capture + YOLOv8 person detection + ByteTrack in a background thread.
-    Stores the latest annotated frame + stats for WebSocket consumers to poll.
+    AI detection pipeline: reads RTSP, runs YOLO+ByteTrack, stores stats.
+    Video delivery is handled separately by HLSStream (FFmpeg).
+    Pipeline only connects to RTSP when detection is enabled.
     """
 
     def __init__(self, stream_id: str, url: str, detection_enabled: bool = True):
@@ -96,16 +83,27 @@ class StreamPipeline:
         consecutive_failures = 0
 
         while self.running:
-            # ── Model lifecycle ──────────────────────────────────────────────
-            if not _NO_AI and self.detection_enabled and model is None:
+            # ── Detection off: release RTSP, sleep, no AI ───────────────────
+            if not self.detection_enabled:
+                if cap:
+                    cap.release()
+                    cap = None
+                    self.is_connected = False
+                if self._detection_was_enabled:
+                    model = None
+                    gc.collect()
+                    self._tracker = TrackRegistry()
+                    self._detection_was_enabled = False
+                    print(f"[Pipeline {self.stream_id}] YOLO unloaded")
+                with self._lock:
+                    self.latest = {"stats": {"active_count": 0, "total_count": 0, "persons": []}}
+                time.sleep(1)
+                continue
+
+            # ── Lazy-load YOLO ───────────────────────────────────────────────
+            if not _NO_AI and model is None:
                 model = YOLO("yolov8n.pt")
                 self._detection_was_enabled = True
-            elif not self.detection_enabled and self._detection_was_enabled:
-                model = None
-                gc.collect()
-                self._tracker = TrackRegistry()
-                self._detection_was_enabled = False
-                print(f"[Pipeline {self.stream_id}] YOLO unloaded")
 
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
@@ -120,38 +118,30 @@ class StreamPipeline:
                 self.is_connected = True
                 self.error = None
 
-            # ── Throttle ────────────────────────────────────────────────────
-            if self.detection_enabled:
-                time.sleep(_FRAME_INTERVAL_ON)
-            else:
-                time.sleep(_FRAME_INTERVAL_OFF)
-
+            # ── Read frame ──────────────────────────────────────────────────
+            time.sleep(1 / 20)
             ret, frame = cap.read()
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures >= _MAX_FAILURES:
-                    # Stream genuinely dead — reconnect
                     cap.release()
                     cap = None
                     self.is_connected = False
                     consecutive_failures = 0
-                    print(f"[Pipeline {self.stream_id}] Reconnecting after {_MAX_FAILURES} failed reads")
-                # Don't reconnect immediately — H.265 may just be waiting for IDR
                 continue
-
             consecutive_failures = 0
 
             try:
                 h, w = frame.shape[:2]
                 if w > 1280:
                     scale = 1280 / w
-                    display_frame = cv2.resize(frame, (1280, int(h * scale)))
-                else:
-                    display_frame = frame.copy()
+                    frame = cv2.resize(frame, (1280, int(h * scale)))
 
-                if not _NO_AI and self.detection_enabled:
+                stats = {"active_count": 0, "total_count": 0, "persons": []}
+
+                if not _NO_AI:
                     results = model.track(
-                        display_frame,
+                        frame,
                         persist=True,
                         classes=[0],
                         verbose=False,
@@ -160,54 +150,19 @@ class StreamPipeline:
                     )
 
                     active_ids: set = set()
-
                     if results[0].boxes.id is not None:
-                        boxes = results[0].boxes.xyxy.cpu().numpy()
                         track_ids = results[0].boxes.id.cpu().numpy().astype(int)
                         confs = results[0].boxes.conf.cpu().numpy()
-
-                        for box, raw_tid, conf in zip(boxes, track_ids, confs):
+                        for raw_tid, conf in zip(track_ids, confs):
                             tid = int(raw_tid)
-                            info = self._tracker.update(tid, float(conf))
+                            self._tracker.update(tid, float(conf))
                             active_ids.add(tid)
-
-                            x1, y1, x2, y2 = map(int, box)
-                            color = (0, 255, 100)
-                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-
-                            label = info.tag
-                            (tw, th), _ = cv2.getTextSize(
-                                label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2
-                            )
-                            cv2.rectangle(
-                                display_frame,
-                                (x1, y1 - th - 10),
-                                (x1 + tw + 6, y1),
-                                color,
-                                -1,
-                            )
-                            cv2.putText(
-                                display_frame,
-                                label,
-                                (x1 + 3, y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.55,
-                                (0, 0, 0),
-                                2,
-                            )
 
                     self._tracker.mark_inactive(active_ids)
                     stats = self._tracker.get_stats()
-                else:
-                    stats = {"active_count": 0, "total_count": 0, "persons": []}
-
-                _, buf = cv2.imencode(
-                    ".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75]
-                )
-                frame_b64 = base64.b64encode(buf).decode("utf-8")
 
                 with self._lock:
-                    self.latest = {"frame": frame_b64, "stats": stats}
+                    self.latest = {"stats": stats}
 
             except Exception as exc:
                 print(f"[Pipeline {self.stream_id}] Error: {exc}")

@@ -1,0 +1,159 @@
+LAPORAN BULANAN — SISTEM PERSON TRACKING
+=========================================
+
+Berikut poin-poin pekerjaan yang telah diselesaikan:
+
+
+ARSITEKTUR & INFRASTRUKTUR
+--------------------------
+- Desain arsitektur sistem: backend FastAPI + frontend React + reverse proxy Nginx
+  dikemas dalam Docker Compose (multi-container)
+- Setup repository Git dan push ke GitHub (ivanadhii/visitor-tracking)
+- Pembuatan Makefile dengan perintah operasional: up, down, build, rebuild per
+  service, logs, restart, clean
+- Konfigurasi Nginx sebagai reverse proxy untuk menyatukan backend API dan
+  frontend dalam satu port (80)
+
+
+BACKEND — RTSP STREAM MANAGEMENT
+----------------------------------
+- Implementasi StreamManager untuk mengelola multiple RTSP stream secara paralel
+- Setiap stream berjalan di thread terpisah (StreamPipeline) dengan auto-reconnect
+  jika koneksi terputus
+- Konfigurasi RTSP TCP transport untuk mengatasi packet loss pada protokol UDP
+- Penanganan stream H.265/HEVC dari kamera Hikvision: toleransi GOP wait,
+  error concealment, dan suppression log FFmpeg yang tidak relevan
+- Flush frame awal saat konek untuk melewati frame korup sebelum IDR keyframe
+
+
+BACKEND — KONFIGURASI BERBASIS FILE
+-------------------------------------
+- Manajemen stream via file streams.yaml yang bisa diedit manual
+- File watcher background thread: perubahan pada streams.yaml otomatis
+  ter-apply ke sistem tanpa restart (add/remove/update stream)
+- Sinkronisasi dua arah: tambah stream dari Web UI → tulis ke YAML,
+  edit YAML → langsung tampil di Web UI
+- Format YAML human-readable dengan komentar panduan penggunaan
+
+
+BACKEND — AI DETECTION (YOLO + ByteTrack)
+-------------------------------------------
+- Integrasi YOLOv8n untuk deteksi orang (person-only, class 0)
+- Integrasi ByteTrack untuk pelacakan identitas per individu lintas frame
+- Setiap orang yang terdeteksi diberi tag unik, dicatat waktu pertama terlihat,
+  durasi, dan confidence score
+- Anotasi bounding box dan label langsung di atas frame video
+
+
+BACKEND — OPTIMASI PERFORMA
+-----------------------------
+- Lazy loading YOLO model: model hanya dimuat saat detection diaktifkan,
+  tidak dimuat saat detection off (hemat RAM ~500MB per stream)
+- Mekanisme unload model: saat detection dimatikan, model di-release dari
+  memori dan garbage collector dipanggil
+- Throttle frame rate 10 fps saat detection off menggunakan sleep-then-read
+  (menggantikan busy-loop yang sebelumnya menyebabkan CPU 100%)
+- Limitasi resolusi input YOLO maksimal 1280px untuk efisiensi inferensi
+
+
+BACKEND — GPU ACCELERATION
+----------------------------
+- Migrasi base Docker image ke nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+- Instalasi PyTorch dengan CUDA 12.4 (kompatibel dengan driver CUDA 12.8)
+- Auto-detect GPU saat startup menggunakan torch.cuda.is_available(),
+  fallback otomatis ke CPU jika GPU tidak tersedia
+- Konfigurasi docker-compose.yml dengan NVIDIA GPU reservation
+- Panduan instalasi NVIDIA Container Toolkit di server
+- Perintah make gpu-check untuk verifikasi GPU terdeteksi di dalam container
+
+
+BACKEND — TOGGLE DETEKSI
+--------------------------
+- Toggle on/off deteksi AI per stream individual via API PATCH /api/streams/{id}
+- Toggle on/off deteksi AI untuk semua stream sekaligus via API PATCH /api/streams
+- State detection disimpan ke streams.yaml (persisten antar restart)
+- Saat detection off: pipeline tetap berjalan (video tetap tampil),
+  YOLO tidak dieksekusi sama sekali
+
+
+BACKEND — AUTENTIKASI
+-----------------------
+- Sistem login berbasis file userlist.yaml (username + password teks biasa)
+- File watcher: tambah/hapus user di YAML langsung aktif dalam 5 detik
+- JWT token (HS256) sebagai session: stateless, token tetap valid
+  meski container di-restart (secret key dipersisten di data/.jwt_secret)
+- Proteksi semua endpoint REST API dengan dependency require_auth
+- Proteksi WebSocket via query parameter ?token=
+- Autentikasi bersifat opsional: jika userlist.yaml tidak ada atau kosong,
+  sistem dapat diakses tanpa login
+
+
+BACKEND — MONITORING SERVER
+-----------------------------
+- Endpoint /api/system untuk data resource usage real-time
+- CPU usage via psutil dengan background polling setiap 2 detik
+- RAM usage: used/total dalam GB dan persentase
+- Disk usage: used/total dalam GB dan persentase
+- GPU stats via pynvml: utilization%, VRAM used/total MB, suhu °C, nama GPU
+- Fallback graceful jika GPU tidak tersedia
+
+
+BACKEND — MODE PLAIN (TANPA AI)
+---------------------------------
+- Dockerfile.plain dan requirements.plain.txt tanpa PyTorch/Ultralytics
+  (ukuran image ~800MB lebih ringan)
+- Environment variable NO_AI=1 untuk menonaktifkan seluruh kode AI
+- docker-compose.plain.yml untuk deployment mode monitoring-only
+- Import ultralytics dilindungi kondisional (tidak crash jika tidak terinstall)
+
+
+FRONTEND — ANTARMUKA UTAMA
+----------------------------
+- Halaman dashboard dengan layout: header — sidebar kiri — area video — panel kanan
+- Header: nama sistem, tombol toggle AI global, tombol tambah stream,
+  nama user yang login, tombol logout
+- Sidebar kiri: daftar kamera dengan status koneksi (hijau/abu),
+  jumlah connected/total, tombol toggle deteksi per stream, tombol hapus stream
+- Area tengah: tampilan video live dari stream yang dipilih, status bar
+  LIVE/CONNECTING, jumlah orang in-frame dan total terdeteksi
+- Panel kanan: statistik deteksi (aktif/total), riwayat track per orang,
+  monitoring resource server di bagian bawah
+
+
+FRONTEND — HALAMAN LOGIN
+--------------------------
+- Halaman login fullscreen sebelum masuk dashboard
+- Form username dan password dengan pesan error yang jelas
+- Token JWT disimpan di localStorage browser
+- Auto-redirect ke login jika token expired atau tidak valid
+- Deteksi otomatis apakah auth diperlukan (cek userlist.yaml via API)
+
+
+FRONTEND — WEBSOCKET VIDEO STREAMING
+--------------------------------------
+- Koneksi WebSocket per stream untuk menerima frame JPEG (base64) real-time
+- Reconnect otomatis jika koneksi WebSocket terputus
+- Token dikirim sebagai query parameter pada URL WebSocket
+- Target tampilan 20 fps
+
+
+FRONTEND — KOMPONEN RESOURCE MONITOR
+--------------------------------------
+- Komponen SystemStats dengan progress bar untuk CPU, RAM, Disk, GPU, VRAM
+- Color coding: hijau (normal) → kuning (warning) → merah (kritis)
+  dengan threshold yang dapat dikonfigurasi
+- Refresh data setiap 4 detik
+- Menampilkan nama GPU dan suhu di bawah bar VRAM
+
+
+DEPLOYMENT
+-----------
+- Semua service (backend, frontend, nginx) dikemas dalam satu docker-compose.yml
+- Volume bind mount ./data untuk streams.yaml dan userlist.yaml
+  agar bisa diedit langsung dari host server tanpa masuk container
+- File credentials (streams.yaml, userlist.yaml) masuk .gitignore
+  agar tidak ter-commit ke repository
+- Dua mode deployment tersedia:
+    make build       → mode lengkap dengan AI (GPU)
+    make plain-build → mode ringan tanpa AI
+

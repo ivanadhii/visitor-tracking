@@ -9,6 +9,7 @@ services:
       - yolo_cache:/root/.config/Ultralytics
       - ./backend/bytetrack.yaml:/app/bytetrack.yaml
       - ./data:/app/data
+      - hls_data:/app/hls
     deploy:
       resources:
         reservations:
@@ -38,6 +39,8 @@ services:
     depends_on:
       - backend
       - frontend
+    volumes:
+      - hls_data:/app/hls:ro
 
 networks:
   internal:
@@ -45,3 +48,4 @@ networks:
 
 volumes:
   yolo_cache:
+  hls_data:

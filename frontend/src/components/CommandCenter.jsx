@@ -1,41 +1,101 @@
 import { useEffect, useRef, useState } from 'react'
-import { Wifi, WifiOff, Eye, ScanEye } from 'lucide-react'
+import Hls from 'hls.js'
+import { WifiOff, ScanEye } from 'lucide-react'
 import PersonList from './PersonList'
 import SystemStats from './SystemStats'
 
 const EMPTY_STATS = { active_count: 0, total_seen: 0, tracks: [] }
 
 export default function CommandCenter({ streamId, token }) {
-  const imgRef = useRef(null)
+  const videoRef = useRef(null)
+  const hlsRef = useRef(null)
   const wsRef = useRef(null)
   const [stats, setStats] = useState(EMPTY_STATS)
-  const [connected, setConnected] = useState(false)
+  const [hlsReady, setHlsReady] = useState(false)
 
+  // ── HLS player ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!streamId) {
+      setHlsReady(false)
       setStats(EMPTY_STATS)
-      setConnected(false)
       return
     }
 
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const query = token ? `?token=${token}` : ''
-    const ws = new WebSocket(`${proto}://${location.host}/ws/stream/${streamId}${query}`)
+    const src = `/hls/${streamId}/index.m3u8`
+    const video = videoRef.current
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onerror = () => setConnected(false)
+    // Destroy previous instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+    setHlsReady(false)
 
-    ws.onmessage = e => {
-      const d = JSON.parse(e.data)
-      if (imgRef.current && d.frame) {
-        imgRef.current.src = `data:image/jpeg;base64,${d.frame}`
-      }
-      if (d.stats) setStats(d.stats)
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 5,
+        lowLatencyMode: false,
+      })
+      hls.loadSource(src)
+      hls.attachMedia(video)
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {})
+        setHlsReady(true)
+      })
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          // Auto-retry after fatal error (stream not ready yet)
+          setTimeout(() => {
+            hls.loadSource(src)
+            hls.startLoad()
+          }, 3000)
+        }
+      })
+      hlsRef.current = hls
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS
+      video.src = src
+      video.addEventListener('loadedmetadata', () => {
+        video.play().catch(() => {})
+        setHlsReady(true)
+      })
     }
 
-    wsRef.current = ws
-    return () => ws.close()
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+    }
+  }, [streamId])
+
+  // ── WebSocket — stats only ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!streamId) return
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const query = token ? `?token=${token}` : ''
+    let ws
+    let retryTimer
+
+    const connect = () => {
+      ws = new WebSocket(`${proto}://${location.host}/ws/stream/${streamId}${query}`)
+      ws.onmessage = e => {
+        const d = JSON.parse(e.data)
+        if (d.stats) setStats(d.stats)
+      }
+      ws.onclose = () => {
+        retryTimer = setTimeout(connect, 3000)
+      }
+      wsRef.current = ws
+    }
+
+    connect()
+    return () => {
+      clearTimeout(retryTimer)
+      ws?.close()
+    }
   }, [streamId, token])
 
   if (!streamId) {
@@ -57,7 +117,7 @@ export default function CommandCenter({ streamId, token }) {
         {/* Status bar */}
         <div className="h-9 bg-gray-900 border-b border-gray-800 flex items-center px-4 gap-2 shrink-0">
           <div className="flex items-center gap-1.5">
-            {connected ? (
+            {hlsReady ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                 <span className="text-xs font-semibold text-green-400 tracking-wide">LIVE</span>
@@ -81,14 +141,16 @@ export default function CommandCenter({ streamId, token }) {
           </div>
         </div>
 
-        {/* Frame */}
-        <div className="flex-1 relative flex items-center justify-center overflow-hidden">
-          <img
-            ref={imgRef}
+        {/* Video */}
+        <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-gray-950">
+          <video
+            ref={videoRef}
             className="max-w-full max-h-full object-contain"
-            alt="Live stream"
+            muted
+            playsInline
+            autoPlay
           />
-          {!connected && (
+          {!hlsReady && (
             <div className="absolute inset-0 flex items-center justify-center bg-gray-950">
               <div className="text-center">
                 <WifiOff size={32} className="mx-auto mb-2 text-gray-700" />

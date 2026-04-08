@@ -10,6 +10,7 @@ services:
       - NO_AI=1
     volumes:
       - ./data:/app/data
+      - hls_data:/app/hls
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/streams"]
       interval: 10s
@@ -32,7 +33,12 @@ services:
     depends_on:
       - backend
       - frontend
+    volumes:
+      - hls_data:/app/hls:ro
 
 networks:
   internal:
     driver: bridge
+
+volumes:
+  hls_data:

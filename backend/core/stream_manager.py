@@ -6,6 +6,7 @@ import threading
 from typing import Dict, List, Optional
 
 from .pipeline import StreamPipeline
+from .hls_manager import HLSManager
 
 STREAMS_FILE = os.environ.get("STREAMS_FILE", "/app/data/streams.yaml")
 
@@ -14,6 +15,7 @@ class StreamManager:
     def __init__(self):
         self._streams: Dict[str, dict] = {}
         self._pipelines: Dict[str, StreamPipeline] = {}
+        self._hls = HLSManager()
         self._file_mtime: float = 0
         self._lock = threading.Lock()
 
@@ -62,12 +64,11 @@ class StreamManager:
             if not url:
                 continue
             self._streams[sid] = {
-                "id": sid,
-                "url": url,
-                "name": name,
+                "id": sid, "url": url, "name": name,
                 "detection": detection,
                 "created_at": entry.get("created_at", time.time()),
             }
+            self._hls.add(sid, url)
             pipeline = StreamPipeline(sid, url, detection_enabled=detection)
             self._pipelines[sid] = pipeline
             pipeline.start()
@@ -78,9 +79,7 @@ class StreamManager:
     # ─── file watcher ─────────────────────────────────────────────────────────
 
     def _start_watcher(self):
-        t = threading.Thread(
-            target=self._watch_loop, daemon=True, name="stream-watcher"
-        )
+        t = threading.Thread(target=self._watch_loop, daemon=True, name="stream-watcher")
         t.start()
 
     def _watch_loop(self):
@@ -106,9 +105,7 @@ class StreamManager:
             detection = entry.get("detection", True)
             if url:
                 file_streams[sid] = {
-                    "id": sid,
-                    "url": url,
-                    "name": name,
+                    "id": sid, "url": url, "name": name,
                     "detection": detection,
                     "created_at": entry.get("created_at", time.time()),
                 }
@@ -117,31 +114,31 @@ class StreamManager:
             current_ids = set(self._streams.keys())
             file_ids = set(file_streams.keys())
 
-            # Streams added in file
             for sid in file_ids - current_ids:
                 s = file_streams[sid]
                 self._streams[sid] = s
+                self._hls.add(sid, s["url"])
                 pipeline = StreamPipeline(sid, s["url"], detection_enabled=s.get("detection", True))
                 self._pipelines[sid] = pipeline
                 pipeline.start()
                 print(f"[StreamManager] Auto-added '{s['name']}' from file")
 
-            # Streams removed from file
             for sid in current_ids - file_ids:
                 name = self._streams[sid]["name"]
                 if sid in self._pipelines:
                     self._pipelines[sid].stop()
                     del self._pipelines[sid]
+                self._hls.remove(sid)
                 del self._streams[sid]
                 print(f"[StreamManager] Auto-removed '{name}' (deleted from file)")
 
-            # URL, name, or detection changed
             for sid in current_ids & file_ids:
                 current = self._streams[sid]
                 updated = file_streams[sid]
                 if current["url"] != updated["url"]:
                     if sid in self._pipelines:
                         self._pipelines[sid].stop()
+                    self._hls.restart(sid, updated["url"])
                     self._streams[sid] = updated
                     pipeline = StreamPipeline(sid, updated["url"], detection_enabled=updated.get("detection", True))
                     self._pipelines[sid] = pipeline
@@ -150,7 +147,6 @@ class StreamManager:
                 else:
                     if current["name"] != updated["name"]:
                         self._streams[sid]["name"] = updated["name"]
-                        print(f"[StreamManager] Renamed stream to '{updated['name']}'")
                     if current.get("detection", True) != updated.get("detection", True):
                         self._streams[sid]["detection"] = updated["detection"]
                         if sid in self._pipelines:
@@ -163,12 +159,11 @@ class StreamManager:
         sid = str(uuid.uuid4())[:8]
         with self._lock:
             self._streams[sid] = {
-                "id": sid,
-                "url": url,
-                "name": name,
+                "id": sid, "url": url, "name": name,
                 "detection": True,
                 "created_at": time.time(),
             }
+            self._hls.add(sid, url)
             pipeline = StreamPipeline(sid, url, detection_enabled=True)
             self._pipelines[sid] = pipeline
             pipeline.start()
@@ -200,6 +195,7 @@ class StreamManager:
             if sid in self._pipelines:
                 self._pipelines[sid].stop()
                 del self._pipelines[sid]
+            self._hls.remove(sid)
             del self._streams[sid]
             self._write_yaml()
         return True
@@ -210,7 +206,7 @@ class StreamManager:
             for sid, stream in self._streams.items():
                 data = dict(stream)
                 p = self._pipelines.get(sid)
-                data["connected"] = p.is_connected if p else False
+                data["connected"] = self._hls.is_active(sid)
                 data["error"] = p.error if p else None
                 data["stats"] = (p.latest or {}).get("stats", {}) if p else {}
                 data["detection"] = stream.get("detection", True)
