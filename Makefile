@@ -25,6 +25,9 @@ rebuild-frontend:
 rebuild-nginx:
 	docker compose up -d --build nginx
 
+rebuild:
+	docker compose down && docker compose up -d --build
+
 # ── Restart specific service (tanpa rebuild) ───────────────────────────────────
 restart-backend:
 	docker compose restart backend
