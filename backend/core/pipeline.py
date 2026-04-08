@@ -144,7 +144,7 @@ class StreamPipeline:
 
             # ── Lazy-load YOLO ───────────────────────────────────────────────
             if not _NO_AI and model is None:
-                model = YOLO("yolov8n.pt")
+                model = YOLO("yolo11n.pt")
                 self._detection_was_enabled = True
                 print(f"[Pipeline {self.stream_id}] YOLO loaded, switching to pipe mode")
 
