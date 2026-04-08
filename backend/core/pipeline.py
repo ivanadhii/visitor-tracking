@@ -1,6 +1,8 @@
 import cv2
 import gc
 import os
+import ctypes
+import ctypes.util
 import base64
 import threading
 import time
@@ -18,26 +20,33 @@ if not _NO_AI:
 else:
     _DEVICE = "cpu"
 
+# ── Suppress FFmpeg global log spam ─────────────────────────────────────────
+# OPENCV_FFMPEG_CAPTURE_OPTIONS "loglevel" only affects per-stream options,
+# not the global FFmpeg log level. Must call av_log_set_level() directly.
+# AV_LOG_ERROR = 16  (only show actual errors, not warnings)
+_avutil = ctypes.util.find_library("avutil")
+if _avutil:
+    try:
+        ctypes.CDLL(_avutil).av_log_set_level(16)
+    except Exception:
+        pass
+
 _FRAME_INTERVAL_OFF = 1 / 10   # 10 fps when detection is off
 _FRAME_INTERVAL_ON  = 1 / 20   # 20 fps cap when detection is on
 
-# Force TCP transport + lenient H.265 decode.
-# Hikvision H.265 has long GOP (50+ frames). On connect, FFmpeg receives
-# P-frames before the first IDR — causing "Could not find ref with POC"
-# warnings until the next keyframe arrives. These are non-fatal; stream
-# decodes correctly once it gets an IDR frame.
-# - rtsp_transport=tcp: reliable delivery, avoids packet loss
-# - stimeout=10s: enough time to receive first keyframe
-# - err_detect=ignore_err: keep decoding despite missing ref frames
-# - fflags=discardcorrupt: drop corrupt packets silently
+# H.265 Hikvision: TCP transport + lenient decode settings
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
     "rtsp_transport;tcp"
     "|stimeout;10000000"
     "|err_detect;ignore_err"
     "|fflags;discardcorrupt"
-    "|loglevel;error"
 )
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+
+# Max consecutive failed reads before treating as disconnected.
+# H.265 GOP can be 50+ frames — give the stream time to reach an IDR
+# instead of immediately reconnecting and looping forever.
+_MAX_FAILURES = 25
 
 
 class StreamPipeline:
@@ -84,6 +93,7 @@ class StreamPipeline:
     def _run(self):
         model: Optional[YOLO] = None
         cap: Optional[cv2.VideoCapture] = None
+        consecutive_failures = 0
 
         while self.running:
             # ── Model lifecycle ──────────────────────────────────────────────
@@ -99,6 +109,7 @@ class StreamPipeline:
 
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
+                consecutive_failures = 0
                 cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
                 if not cap.isOpened():
@@ -106,16 +117,10 @@ class StreamPipeline:
                     self.error = "Cannot open stream"
                     time.sleep(5)
                     continue
-                # Flush initial corrupted frames while H.265 decoder
-                # waits for the first IDR keyframe (up to ~2 seconds)
-                for _ in range(10):
-                    cap.read()
                 self.is_connected = True
                 self.error = None
 
-            # ── Throttle: sleep first, then read ONE frame ───────────────────
-            # This is the key: sleep lets the OS scheduler rest this thread
-            # instead of burning CPU in a tight loop.
+            # ── Throttle ────────────────────────────────────────────────────
             if self.detection_enabled:
                 time.sleep(_FRAME_INTERVAL_ON)
             else:
@@ -123,10 +128,18 @@ class StreamPipeline:
 
             ret, frame = cap.read()
             if not ret:
-                cap.release()
-                cap = None
-                self.is_connected = False
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_FAILURES:
+                    # Stream genuinely dead — reconnect
+                    cap.release()
+                    cap = None
+                    self.is_connected = False
+                    consecutive_failures = 0
+                    print(f"[Pipeline {self.stream_id}] Reconnecting after {_MAX_FAILURES} failed reads")
+                # Don't reconnect immediately — H.265 may just be waiting for IDR
                 continue
+
+            consecutive_failures = 0
 
             try:
                 h, w = frame.shape[:2]
