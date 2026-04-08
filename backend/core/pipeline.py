@@ -5,9 +5,12 @@ import ctypes
 import ctypes.util
 import threading
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 from .tracker import TrackRegistry
+
+if TYPE_CHECKING:
+    from .hls_manager import HLSWriter
 
 _NO_AI = os.environ.get("NO_AI", "0") == "1"
 
@@ -33,31 +36,62 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 _MAX_FAILURES = 25   # consecutive failed reads before reconnect
-_INFER_FPS   = 5    # run YOLO at this rate (no need for 20fps inference)
+_INFER_FPS    = 5    # YOLO inference rate
+_PIPE_FPS     = 10   # annotated frames sent to FFmpeg pipe
+
+# Bounding box / label style
+_BOX_COLOR    = (0, 255, 80)    # green
+_BOX_INACTIVE = (100, 100, 100) # grey for recently-inactive tracks
+_FONT         = cv2.FONT_HERSHEY_SIMPLEX
+_FONT_SCALE   = 0.55
+_THICKNESS    = 2
+
+
+def _draw_boxes(frame, results, tracker: TrackRegistry):
+    """Draw YOLO bounding boxes + track tags onto frame in-place."""
+    if results[0].boxes.id is None:
+        return
+    boxes     = results[0].boxes.xyxy.cpu().numpy().astype(int)
+    track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+    confs     = results[0].boxes.conf.cpu().numpy()
+
+    for (x1, y1, x2, y2), raw_tid, conf in zip(boxes, track_ids, confs):
+        tid  = int(raw_tid)
+        info = tracker.update(tid, float(conf))
+        color = _BOX_COLOR if info.active else _BOX_INACTIVE
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, _THICKNESS)
+        label = f"{info.tag} {conf:.0%}"
+        (lw, lh), _ = cv2.getTextSize(label, _FONT, _FONT_SCALE, _THICKNESS)
+        cv2.rectangle(frame, (x1, y1 - lh - 6), (x1 + lw + 4, y1), color, -1)
+        cv2.putText(frame, label, (x1 + 2, y1 - 4),
+                    _FONT, _FONT_SCALE, (0, 0, 0), _THICKNESS - 1, cv2.LINE_AA)
 
 
 class StreamPipeline:
     """
-    AI detection pipeline: reads RTSP, runs YOLO+ByteTrack, stores stats.
-    Video delivery is handled separately by HLSStream (FFmpeg).
-    Pipeline only connects to RTSP when detection is enabled.
+    Reads RTSP, runs YOLO+ByteTrack, annotates frames, pipes to HLSWriter.
+    When detection is OFF, tells HLSWriter to use direct passthrough instead.
     """
 
-    def __init__(self, stream_id: str, url: str, detection_enabled: bool = True):
+    def __init__(self, stream_id: str, url: str,
+                 detection_enabled: bool = True,
+                 hls_writer: Optional["HLSWriter"] = None):
         self.stream_id = stream_id
         self.url = url
         self.running = False
         self.detection_enabled = detection_enabled
+        self._hls = hls_writer
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-        self.latest: Optional[Dict[str, Any]] = {"stats": {"active_count": 0, "total_seen": 0, "tracks": []}}
+        self.latest: Dict[str, Any] = {"stats": {"active_count": 0, "total_seen": 0, "tracks": []}}
         self.is_connected = False
         self.error: Optional[str] = None
 
         self._tracker = TrackRegistry()
         self._detection_was_enabled = detection_enabled
         self._last_infer: float = 0.0
+        self._last_pipe:  float = 0.0
 
     # ------------------------------------------------------------------ public
 
@@ -73,7 +107,7 @@ class StreamPipeline:
     def stop(self):
         self.running = False
 
-    def get_latest(self) -> Optional[Dict[str, Any]]:
+    def get_latest(self) -> Dict[str, Any]:
         with self._lock:
             return self.latest
 
@@ -81,11 +115,11 @@ class StreamPipeline:
 
     def _run(self):
         model: Optional[YOLO] = None
-        cap: Optional[cv2.VideoCapture] = None
+        cap:   Optional[cv2.VideoCapture] = None
         consecutive_failures = 0
 
         while self.running:
-            # ── Detection off: release RTSP, sleep, no AI ───────────────────
+            # ── Detection OFF: release RTSP + YOLO, use HLS passthrough ─────
             if not self.detection_enabled:
                 if cap:
                     cap.release()
@@ -96,7 +130,9 @@ class StreamPipeline:
                     gc.collect()
                     self._tracker = TrackRegistry()
                     self._detection_was_enabled = False
-                    print(f"[Pipeline {self.stream_id}] YOLO unloaded")
+                    print(f"[Pipeline {self.stream_id}] YOLO unloaded, switching to passthrough")
+                    if self._hls:
+                        self._hls.start_passthrough()
                 with self._lock:
                     self.latest = {"stats": {"active_count": 0, "total_seen": 0, "tracks": []}}
                 time.sleep(1)
@@ -106,6 +142,7 @@ class StreamPipeline:
             if not _NO_AI and model is None:
                 model = YOLO("yolov8n.pt")
                 self._detection_was_enabled = True
+                print(f"[Pipeline {self.stream_id}] YOLO loaded, switching to pipe mode")
 
             # ── Connect / reconnect ──────────────────────────────────────────
             if cap is None or not cap.isOpened():
@@ -120,8 +157,7 @@ class StreamPipeline:
                 self.is_connected = True
                 self.error = None
 
-            # ── Read frame ──────────────────────────────────────────────────
-            # Drain the buffer at 20fps but only run inference at _INFER_FPS
+            # ── Read frame ───────────────────────────────────────────────────
             time.sleep(1 / 20)
             ret, frame = cap.read()
             if not ret:
@@ -134,18 +170,19 @@ class StreamPipeline:
                 continue
             consecutive_failures = 0
 
-            now = time.time()
-            if now - self._last_infer < 1.0 / _INFER_FPS:
-                continue
-            self._last_infer = now
-
-            try:
+            # ── Resize ───────────────────────────────────────────────────────
+            h, w = frame.shape[:2]
+            if w > 1280:
+                scale = 1280 / w
+                frame = cv2.resize(frame, (1280, int(h * scale)))
                 h, w = frame.shape[:2]
-                if w > 1280:
-                    scale = 1280 / w
-                    frame = cv2.resize(frame, (1280, int(h * scale)))
 
-                if not _NO_AI:
+            now = time.time()
+
+            # ── YOLO inference at _INFER_FPS ─────────────────────────────────
+            if not _NO_AI and (now - self._last_infer) >= 1.0 / _INFER_FPS:
+                self._last_infer = now
+                try:
                     results = model.track(
                         frame,
                         persist=True,
@@ -157,21 +194,26 @@ class StreamPipeline:
 
                     active_ids: set = set()
                     if results[0].boxes.id is not None:
-                        track_ids = results[0].boxes.id.cpu().numpy().astype(int)
-                        confs = results[0].boxes.conf.cpu().numpy()
-                        for raw_tid, conf in zip(track_ids, confs):
-                            tid = int(raw_tid)
-                            self._tracker.update(tid, float(conf))
-                            active_ids.add(tid)
+                        for raw_tid in results[0].boxes.id.cpu().numpy().astype(int):
+                            active_ids.add(int(raw_tid))
 
+                    _draw_boxes(frame, results, self._tracker)
                     self._tracker.mark_inactive(active_ids)
-                    stats = self._tracker.get_stats()
 
                     with self._lock:
-                        self.latest = {"stats": stats}
+                        self.latest = {"stats": self._tracker.get_stats()}
 
-            except Exception as exc:
-                print(f"[Pipeline {self.stream_id}] Error: {exc}")
+                except Exception as exc:
+                    print(f"[Pipeline {self.stream_id}] Inference error: {exc}")
+
+            # ── Pipe annotated frame to HLS writer at _PIPE_FPS ──────────────
+            if self._hls and (now - self._last_pipe) >= 1.0 / _PIPE_FPS:
+                self._last_pipe = now
+                self._hls.start_pipe(w, h)   # no-op if already started at same size
+                ok = self._hls.write_frame(frame.tobytes())
+                if not ok:
+                    # Pipe died — restart it next iteration
+                    pass
 
         if cap:
             cap.release()

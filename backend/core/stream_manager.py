@@ -68,10 +68,12 @@ class StreamManager:
                 "detection": detection,
                 "created_at": entry.get("created_at", time.time()),
             }
-            self._hls.add(sid, url)
-            pipeline = StreamPipeline(sid, url, detection_enabled=detection)
+            writer = self._hls.add(sid, url)
+            pipeline = StreamPipeline(sid, url, detection_enabled=detection, hls_writer=writer)
             self._pipelines[sid] = pipeline
             pipeline.start()
+            if not detection:
+                writer.start_passthrough()
         if os.path.exists(STREAMS_FILE):
             self._file_mtime = os.path.getmtime(STREAMS_FILE)
         print(f"[StreamManager] Loaded {len(self._streams)} stream(s) from {STREAMS_FILE}")
@@ -117,10 +119,13 @@ class StreamManager:
             for sid in file_ids - current_ids:
                 s = file_streams[sid]
                 self._streams[sid] = s
-                self._hls.add(sid, s["url"])
-                pipeline = StreamPipeline(sid, s["url"], detection_enabled=s.get("detection", True))
+                detection = s.get("detection", True)
+                writer = self._hls.add(sid, s["url"])
+                pipeline = StreamPipeline(sid, s["url"], detection_enabled=detection, hls_writer=writer)
                 self._pipelines[sid] = pipeline
                 pipeline.start()
+                if not detection:
+                    writer.start_passthrough()
                 print(f"[StreamManager] Auto-added '{s['name']}' from file")
 
             for sid in current_ids - file_ids:
@@ -140,9 +145,13 @@ class StreamManager:
                         self._pipelines[sid].stop()
                     self._hls.restart(sid, updated["url"])
                     self._streams[sid] = updated
-                    pipeline = StreamPipeline(sid, updated["url"], detection_enabled=updated.get("detection", True))
+                    detection = updated.get("detection", True)
+                    writer = self._hls.add(sid, updated["url"])
+                    pipeline = StreamPipeline(sid, updated["url"], detection_enabled=detection, hls_writer=writer)
                     self._pipelines[sid] = pipeline
                     pipeline.start()
+                    if not detection:
+                        writer.start_passthrough()
                     print(f"[StreamManager] Updated URL for '{updated['name']}'")
                 else:
                     if current["name"] != updated["name"]:
@@ -163,8 +172,8 @@ class StreamManager:
                 "detection": True,
                 "created_at": time.time(),
             }
-            self._hls.add(sid, url)
-            pipeline = StreamPipeline(sid, url, detection_enabled=True)
+            writer = self._hls.add(sid, url)
+            pipeline = StreamPipeline(sid, url, detection_enabled=True, hls_writer=writer)
             self._pipelines[sid] = pipeline
             pipeline.start()
             self._write_yaml()
