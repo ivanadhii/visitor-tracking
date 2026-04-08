@@ -135,7 +135,7 @@ export default function CommandCenter({ streamId, token }) {
               {' '}in frame
             </span>
             <span>
-              <span className="text-blue-400 font-semibold tabular-nums">{stats.total_seen ?? 0}</span>
+              <span className="text-blue-400 font-semibold tabular-nums">{stats.total_seen ?? stats.total_count ?? 0}</span>
               {' '}total
             </span>
           </div>
@@ -178,7 +178,7 @@ export default function CommandCenter({ streamId, token }) {
             </div>
             <div className="bg-gray-800/80 rounded-xl p-3 text-center">
               <div className="text-3xl font-bold text-blue-400 tabular-nums leading-none mb-1">
-                {stats.total_seen ?? 0}
+                {stats.total_seen ?? stats.total_count ?? 0}
               </div>
               <div className="text-xs text-gray-500">Total</div>
             </div>

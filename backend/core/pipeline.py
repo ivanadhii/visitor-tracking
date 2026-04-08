@@ -33,6 +33,7 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 _MAX_FAILURES = 25   # consecutive failed reads before reconnect
+_INFER_FPS   = 5    # run YOLO at this rate (no need for 20fps inference)
 
 
 class StreamPipeline:
@@ -50,12 +51,13 @@ class StreamPipeline:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-        self.latest: Optional[Dict[str, Any]] = None
+        self.latest: Optional[Dict[str, Any]] = {"stats": {"active_count": 0, "total_seen": 0, "tracks": []}}
         self.is_connected = False
         self.error: Optional[str] = None
 
         self._tracker = TrackRegistry()
         self._detection_was_enabled = detection_enabled
+        self._last_infer: float = 0.0
 
     # ------------------------------------------------------------------ public
 
@@ -96,7 +98,7 @@ class StreamPipeline:
                     self._detection_was_enabled = False
                     print(f"[Pipeline {self.stream_id}] YOLO unloaded")
                 with self._lock:
-                    self.latest = {"stats": {"active_count": 0, "total_count": 0, "persons": []}}
+                    self.latest = {"stats": {"active_count": 0, "total_seen": 0, "tracks": []}}
                 time.sleep(1)
                 continue
 
@@ -119,6 +121,7 @@ class StreamPipeline:
                 self.error = None
 
             # ── Read frame ──────────────────────────────────────────────────
+            # Drain the buffer at 20fps but only run inference at _INFER_FPS
             time.sleep(1 / 20)
             ret, frame = cap.read()
             if not ret:
@@ -131,13 +134,16 @@ class StreamPipeline:
                 continue
             consecutive_failures = 0
 
+            now = time.time()
+            if now - self._last_infer < 1.0 / _INFER_FPS:
+                continue
+            self._last_infer = now
+
             try:
                 h, w = frame.shape[:2]
                 if w > 1280:
                     scale = 1280 / w
                     frame = cv2.resize(frame, (1280, int(h * scale)))
-
-                stats = {"active_count": 0, "total_count": 0, "persons": []}
 
                 if not _NO_AI:
                     results = model.track(
@@ -161,8 +167,8 @@ class StreamPipeline:
                     self._tracker.mark_inactive(active_ids)
                     stats = self._tracker.get_stats()
 
-                with self._lock:
-                    self.latest = {"stats": stats}
+                    with self._lock:
+                        self.latest = {"stats": stats}
 
             except Exception as exc:
                 print(f"[Pipeline {self.stream_id}] Error: {exc}")
